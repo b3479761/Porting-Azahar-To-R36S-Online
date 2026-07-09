@@ -1,0 +1,185 @@
+#!/bin/bash
+
+# ==========================================
+# LOGGING SETUP
+# ==========================================
+LOG_FILE="/roms/ports/caves3ds/file.txt"
+rm -f "$LOG_FILE"
+exec > "$LOG_FILE" 2>&1
+
+echo "=== STARTING PORTMASTER LAUNCHER SCRIPT WITH MESAPACK (VULKAN) ==="
+date
+
+# PortMaster preamble
+XDG_DATA_HOME=${XDG_DATA_HOME:-$HOME/.local/share}
+if [ -d "/opt/system/Tools/PortMaster/" ]; then
+  controlfolder="/opt/system/Tools/PortMaster"
+elif [ -d "/opt/tools/PortMaster/" ]; then
+  controlfolder="/opt/tools/PortMaster"
+elif [ -d "$XDG_DATA_HOME/PortMaster/" ]; then
+  controlfolder="$XDG_DATA_HOME/PortMaster"
+else
+  controlfolder="/roms/ports/PortMaster"
+fi
+source $controlfolder/control.txt 
+export PORT_32BIT="N"
+[ -f "${controlfolder}/mod_${CFW_NAME}.txt" ] && source "${controlfolder}/mod_${CFW_NAME}.txt"
+get_controls
+
+# Define Weston and Mesapack parameters
+weston_dir=/tmp/weston
+weston_runtime="weston_pkg_0.2"
+weston_url="https://github.com/PortsMaster/PortMaster-New/raw/refs/heads/main/runtimes/weston_pkg_0.2.aarch64.squashfs"
+
+mesa_dir=/tmp/mesapack
+mesa_runtime="mesa_pkg_0.1"
+mesa_url="https://github.com/PortsMaster/PortMaster-New/raw/refs/heads/main/runtimes/mesa_pkg_0.1.aarch64.squashfs"
+
+azahar_zip_url="https://www.dropbox.com/scl/fi/sulf70aixl3tdlmg1pw5h/Azahar4R36S.zip?rlkey=ovljjgs3h07flci138k0lxztn&st=sgrpd90p&dl=1"
+
+# Verify/Download Weston Runtime
+echo "Checking Weston runtime..."
+if [ ! -f "$controlfolder/libs/${weston_runtime}.squashfs" ]; then
+    echo "Weston squashfs not found locally. Downloading..."
+    curl -L -s -o "$controlfolder/libs/${weston_runtime}.squashfs" "$weston_url"
+    if [ ! -f "$controlfolder/libs/${weston_runtime}.squashfs" ]; then
+        if [ ! -f "$controlfolder/harbourmaster" ]; then
+            pm_message "This port requires the latest PortMaster to run, please go to https://portmaster.games for more info."
+            sleep 5
+            exit 1
+        fi
+        $ESUDO $controlfolder/harbourmaster --quiet --no-check runtime_check "${weston_runtime}.squashfs"
+    fi
+fi
+
+# Verify/Download Mesapack Runtime
+echo "Checking Mesapack runtime..."
+if [ ! -f "$controlfolder/libs/${mesa_runtime}.squashfs" ]; then
+    echo "Mesa squashfs not found locally. Downloading..."
+    curl -L -s -o "$controlfolder/libs/${mesa_runtime}.squashfs" "$mesa_url"
+    if [ ! -f "$controlfolder/libs/${mesa_runtime}.squashfs" ]; then
+        $ESUDO $controlfolder/harbourmaster --quiet --no-check runtime_check "${mesa_runtime}.squashfs"
+    fi
+fi
+
+# Verify/Download Azahar Application Engine Files
+echo "Checking Azahar main files..."
+if [ ! -f "/roms/ports/caves3ds/Azaharvk.sqfs" ]; then
+    echo "Azaharvk.sqfs missing. Fetching application archive..."
+    mkdir -p /tmp/azahar_dl
+    curl -L -s -o /tmp/azahar_dl/Azahar4R36S.zip "$azahar_zip_url"
+    if [ -f /tmp/azahar_dl/Azahar4R36S.zip ]; then
+        echo "Extracting files to /roms/ports/..."
+        unzip -o /tmp/azahar_dl/Azahar4R36S.zip -d /roms/ports/
+        rm -rf /tmp/azahar_dl
+    else
+        echo "Critical error: Failed to download Azahar4R36S.zip"
+    fi
+fi
+
+# Mount Weston squashfs
+echo "Mounting Weston..."
+$ESUDO mkdir -p "${weston_dir}"
+if [[ "$PM_CAN_MOUNT" != "N" ]]; then
+    $ESUDO umount "${weston_dir}" 2>/dev/null
+fi
+$ESUDO mount "$controlfolder/libs/${weston_runtime}.squashfs" "${weston_dir}"
+
+# Mount Mesapack squashfs
+echo "Mounting Mesapack..."
+$ESUDO mkdir -p "${mesa_dir}"
+if [[ "$PM_CAN_MOUNT" != "N" ]]; then
+    $ESUDO umount "${mesa_dir}" 2>/dev/null
+fi
+$ESUDO mount "$controlfolder/libs/${mesa_runtime}.squashfs" "${mesa_dir}"
+
+# Mount Azahar Application Engine
+echo "Mounting Azahar application..."
+$ESUDO mkdir -p /tmp/Azahar
+if [[ "$PM_CAN_MOUNT" != "N" ]]; then
+    $ESUDO umount /tmp/Azahar 2>/dev/null
+fi
+$ESUDO mount /roms/ports/caves3ds/Azaharvk.sqfs /tmp/Azahar
+
+# ==========================================
+# VULKAN SOFTWARE RENDERING PARAMETERS
+# ==========================================
+export GALLIUM_HUD="fps,cpu"
+export GALLIUM_DRIVER="lvp"
+export VK_DRIVER_FILES="/tmp/usr/share/vulkan/icd.d/lvp_icd.aarch64.json"
+export AMD_VULKAN_ICD="layer"
+
+unset LIBGL_ALWAYS_SOFTWARE
+unset MESA_LOADER_DRIVER_OVERRIDE
+
+# Prepend Mesapack libraries
+export LD_LIBRARY_PATH="${mesa_dir}/lib:${mesa_dir}/usr/lib:${mesa_dir}/usr/lib/dri"
+
+# =====================================================================
+# PATH INITIALIZATION & PERSISTENT EMPTY INI GENERATION
+# =====================================================================
+export HOME="/home/ark"
+export XDG_CONFIG_HOME="$HOME/.config"
+
+mkdir -p "$XDG_CONFIG_HOME/aethersx2/inis"
+mkdir -p "$XDG_CONFIG_HOME/PCSX2/inis"
+
+touch "$XDG_CONFIG_HOME/aethersx2/inis/PCSX2.ini"
+touch "$XDG_CONFIG_HOME/PCSX2/inis/PCSX2.ini"
+
+$ESUDO chown -R $(whoami):$(whoami) "$HOME/.config"
+
+# =====================================================================
+# BIOS INJECTION WITH UPDATED USER FILE PATHS
+# =====================================================================
+echo "Injecting PS2 BIOS files..."
+mkdir -p "$XDG_CONFIG_HOME/aethersx2/bios"
+mkdir -p "$XDG_CONFIG_HOME/PCSX2/bios"
+
+for BIOS_DIR in "$XDG_CONFIG_HOME/aethersx2/bios" "$XDG_CONFIG_HOME/PCSX2/bios"; do
+    if [ -f "/roms/bios/scph39001.bin" ]; then
+        cp "/roms/bios/scph39001.bin" "$BIOS_DIR/"
+    else
+        echo "Warning: /roms/bios/scph39001.bin not found!"
+    fi
+
+    if [ -f "/roms/bios/scph39001.MEC" ]; then
+        cp "/roms/bios/scph39001.MEC" "$BIOS_DIR/"
+    else
+        echo "Warning: /roms/bios/scph39001.MEC not found!"
+    fi
+done
+# =====================================================================
+
+# Target the keymapper directly to AppRun
+echo "Starting gptokeyb..."
+$GPTOKEYB "AppRunPS2" -c "/roms/ports/caves3ds/pcsx2.gptk" & 
+sleep 0.5
+
+# Launch the graphical wrapper tool forcing software parameters and the target ROM path
+echo "Executing application runtime window..."
+$ESUDO env HOME="$HOME" XDG_CONFIG_HOME="$XDG_CONFIG_HOME" DBUS_SESSION_BUS_ADDRESS=/dev/null GALLIUM_HUD="$GALLIUM_HUD" GALLIUM_DRIVER="lvp" VK_DRIVER_FILES="$VK_DRIVER_FILES" AMD_VULKAN_ICD="$AMD_VULKAN_ICD" LD_LIBRARY_PATH="$LD_LIBRARY_PATH" $weston_dir/westonwrap.sh drm gl kiosk system /tmp/Azahar/AppDir/AppRunPS2 /roms/ports/caves3ds/torus.elf
+
+echo "Application closed or crashed. Running cleanups..."
+
+# Cleanup block matching working structure
+$ESUDO pkill -9 gptokeyb
+$ESUDO pkill -9 weston
+$ESUDO pkill -9 westonwrap.sh
+$ESUDO pkill -9 AppRun
+$ESUDO pkill -9 aethersx2-qt
+$ESUDO pkill -9 aethersx2
+
+if [[ "$PM_CAN_MOUNT" != "N" ]]; then
+    $ESUDO umount /tmp/Azahar 2>/dev/null
+    $ESUDO umount "${mesa_dir}" 2>/dev/null
+    $ESUDO umount "${weston_dir}" 2>/dev/null
+fi
+
+$ESUDO pkill -9 mono
+rm -rf /tmp/citra_home
+pm_finish
+$ESUDO systemctl restart oga_events &
+printf "\033c" > /dev/tty0
+
+echo "=== SCRIPT FINISHED ==="
