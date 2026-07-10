@@ -1,6 +1,8 @@
 # Porting-Azahar-To-R36S-Online
 ##WIP don't use this script##
-This script would automate the setup process from download all necessary files, unzip, and install it into the system, all you are required to do is connect to the internet and launch this script and grab a cup of coffee and in a few minutes your emulator are ready to launch any game you want.
+This script automate the setup process to download all necessary files, unzip, and install it into the ArkOS system, launch this script with active connection, and grab a cup of coffee and in a few minutes the emulator are ready to launch any game.
+
+it only tested to work on R36S on ArkOS 2.0
 
 file structure: 
 aethersx2-R36S.sh
